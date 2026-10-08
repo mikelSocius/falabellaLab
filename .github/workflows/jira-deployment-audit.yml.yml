@@ -1,0 +1,92 @@
+name: Jira Deployment Audit
+
+# Se dispara de forma desacoplada al terminar el workflow de CD principal
+on:
+  workflow_run:
+    workflows: ["CI/CD Pipeline"] # <-- Cambiar por el nombre exacto de tu workflow actual
+    types:
+      - completed
+
+jobs:
+  report-to-jira:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Emitir Evento de Trazabilidad hacia Jira
+        run: |
+          # 1. Extraer datos del workflow que acaba de terminar (workflow_run)
+          RUN_CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          FULL_SHA="${{ github.event.workflow_run.head_sha }}"
+          SHORT_SHA=$(echo "$FULL_SHA" | cut -c1-7)
+          COMMIT_MSG=$(cat << 'EOF'
+          ${{ github.event.workflow_run.head_commit.message }}
+          EOF
+          )
+
+          # 2. Mapear Resultado (Exitoso / Fallido)
+          if [ "$RUN_CONCLUSION" == "success" ]; then
+            DEPLOY_STATUS="Exitoso"
+          else
+            DEPLOY_STATUS="Fallido"
+          fi
+
+          # 3. Deducir Ambiente según la rama del commit
+          if [ "$HEAD_BRANCH" == "main" ] || [ "$HEAD_BRANCH" == "master" ]; then
+            ENV_NAME="PROD"
+          elif [[ "$HEAD_BRANCH" =~ ^release ]]; then
+            ENV_NAME="QA"
+          else
+            ENV_NAME="DEV"
+          fi
+
+          # 4. Deducir Tipo de Cambio a partir del mensaje del commit
+          if [[ "$COMMIT_MSG" =~ ^fix: ]]; then
+            CHANGE_TYPE="incidente"
+          elif [[ "$COMMIT_MSG" =~ ^feat: ]]; then
+            CHANGE_TYPE="desarrollo"
+          else
+            CHANGE_TYPE="mejora"
+          fi
+
+          REPO_NAME="${{ github.event.repository.name }}"
+          REPO_URL="${{ github.event.repository.html_url }}"
+          START_TIME="${{ github.event.workflow_run.run_started_at }}"
+          END_TIME="${{ github.event.workflow_run.updated_at }}"
+          WORKFLOW_URL="${{ github.event.workflow_run.html_url }}"
+          ACTOR_NAME="${{ github.event.workflow_run.triggering_actor.login }}"
+
+          # 5. Enviar el JSON limpio hacia el Incoming Webhook de Jira
+          curl -s -X POST "${{ secrets.JIRA_DEPLOYMENT_WEBHOOK }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "common": {
+                "summary": "[DEPLOYMENT]['"$ENV_NAME"']['"$REPO_NAME"'] '"$SHORT_SHA"'",
+                "pais": "${{ vars.PAIS || '\''CL'\'' }}",
+                "ambiente": "'"$ENV_NAME"'",
+                "aplicacion": "'"$REPO_NAME"'",
+                "tipo_cambio": "'"$CHANGE_TYPE"'",
+                "tipo_componente": "normal",
+                "repositorio_url": "'"$REPO_URL"'",
+                "pull_request_url": "'"$REPO_URL"'",
+                "commit_sha": "'"$SHORT_SHA"'",
+                "fecha_inicio": "'"$START_TIME"'",
+                "fecha_fin": "'"$END_TIME"'",
+                "resultado": "'"$DEPLOY_STATUS"'",
+                "observaciones": "'"${COMMIT_MSG//$'\n'/ }"'",
+                "portafolio": "${{ vars.PORTAFOLIO || '\''Crecer en Clientes'\'' }}",
+                "plataforma": "Docker Swarm",
+                "fuente": "Github Actions",
+                "workflow_run_url": "'"$WORKFLOW_URL"'",
+                "actor": "'"$ACTOR_NAME"'"
+              },
+              "platform_data": {
+                "swarm_cluster": "swarm-prod-cl",
+                "stack": "'"$REPO_NAME"'-stack",
+                "service_name": "'"$REPO_NAME"'-api",
+                "docker_image": "'"$REPO_NAME"'",
+                "docker_image_tag": "'"$SHORT_SHA"'",
+                "url_harbor": "hub.fif.tech/omni/'"$REPO_NAME"':'"$SHORT_SHA"'"
+              }
+            }'
+
+          echo "Trazabilidad enviada a Jira con éxito."
