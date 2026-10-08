@@ -1,9 +1,9 @@
-name: Jira Deployment Audit
+ename: Jira Deployment Audit
 
 # Se dispara de forma desacoplada al terminar el workflow de CD principal
 on:
   workflow_run:
-    workflows: ["CI/CD Pipeline"] # <-- Cambiar por el nombre exacto de tu workflow actual
+    workflows: ["release"] # <-- Cambiar por el nombre exacto de tu workflow actual
     types:
       - completed
 
