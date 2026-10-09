@@ -1,92 +1,96 @@
-ename: Jira Deployment Audit
+name: "Jira Deployment Record - API"
 
-# Se dispara de forma desacoplada al terminar el workflow de CD principal
 on:
   workflow_run:
-    workflows: ["release"] # <-- Cambiar por el nombre exacto de tu workflow actual
+    workflows: ["release"]  # Reemplaza por el 'name' de tu workflow origen
     types:
       - completed
 
 jobs:
-  report-to-jira:
+  create-jira-deployment:
     runs-on: ubuntu-latest
     steps:
-      - name: Emitir Evento de Trazabilidad hacia Jira
+      - name: Generar Deployment Record en Jira via API
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          
+          # Datos del evento workflow_run
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_commit.id }}
+          COMMIT_MSG: ${{ github.event.workflow_run.head_commit.message }}
+          REPO_URL: ${{ github.event.repository.html_url }}
+          APP_NAME: ${{ github.event.repository.name }}
+          WORKFLOW_URL: ${{ github.event.workflow_run.html_url }}
+          PR_URL: ${{ github.event.workflow_run.pull_requests[0].html_url }}
         run: |
-          # 1. Extraer datos del workflow que acaba de terminar (workflow_run)
-          RUN_CONCLUSION="${{ github.event.workflow_run.conclusion }}"
-          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
-          FULL_SHA="${{ github.event.workflow_run.head_sha }}"
-          SHORT_SHA=$(echo "$FULL_SHA" | cut -c1-7)
-          COMMIT_MSG=$(cat << 'EOF'
-          ${{ github.event.workflow_run.head_commit.message }}
+          # 1. Determinar Ambiente según la rama
+          if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+            ENV_VALUE="PROD"
+          else
+            ENV_VALUE="QA"
+          fi
+
+          # 3. Formatear fechas y SHA
+          SHORT_SHA=$(echo "$COMMIT_SHA" | cut -c1-7)
+          FECHA_SOLICITADA=$(date -u +"%Y-%m-%dT%H:%M:%S.000-0300")
+          FECHA_TERMINO=$(date -u +"%Y-%m-%dT%H:%M:%S.000-0300")
+          PR_LINK="${PR_URL:-$REPO_URL}"
+
+          # 4. Construir Payload JSON (IDs estándar del proyecto PT)
+          PAYLOAD=$(cat <<EOF
+          {
+            "fields": {
+              "project": { "key": "PT" },
+              "issuetype": { "name": "Deployment" },
+              "summary": "[DEPLOYMENT][$ENV_VALUE][$APP_NAME] $SHORT_SHA",
+              "description": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [{ "type": "text", "text": "$COMMIT_MSG" }]
+                  }
+                ]
+              },
+              "customfield_10761": { "value": "CL" },
+              "customfield_10762": { "value": "$ENV_VALUE" },
+              "customfield_10763": "$APP_NAME",
+              "customfield_10764": { "value": "Desarrollo" },
+              "customfield_10765": { "value": "Normal" },
+              "customfield_10766": "$REPO_URL",
+              "customfield_10767": "$PR_LINK",
+              "customfield_10768": "$SHORT_SHA",
+              "customfield_10769": "$FECHA_SOLICITADA",
+              "customfield_10770": { "value": "$RESULT_VALUE" },
+              "customfield_10771": "$FECHA_TERMINO",
+              "customfield_10772": "Ejecución automatizada desde GitHub Actions. Logs: $WORKFLOW_URL",
+              "customfield_10773": { "value": "Fanatizar" },
+              "customfield_10774": { "value": "Portainer" },
+              "customfield_10775": { "value": "GitHub Actions" }
+            }
+          }
           EOF
           )
 
-          # 2. Mapear Resultado (Exitoso / Fallido)
-          if [ "$RUN_CONCLUSION" == "success" ]; then
-            DEPLOY_STATUS="Exitoso"
-          else
-            DEPLOY_STATUS="Fallido"
-          fi
-
-          # 3. Deducir Ambiente según la rama del commit
-          if [ "$HEAD_BRANCH" == "main" ] || [ "$HEAD_BRANCH" == "master" ]; then
-            ENV_NAME="PROD"
-          elif [[ "$HEAD_BRANCH" =~ ^release ]]; then
-            ENV_NAME="QA"
-          else
-            ENV_NAME="DEV"
-          fi
-
-          # 4. Deducir Tipo de Cambio a partir del mensaje del commit
-          if [[ "$COMMIT_MSG" =~ ^fix: ]]; then
-            CHANGE_TYPE="incidente"
-          elif [[ "$COMMIT_MSG" =~ ^feat: ]]; then
-            CHANGE_TYPE="desarrollo"
-          else
-            CHANGE_TYPE="mejora"
-          fi
-
-          REPO_NAME="${{ github.event.repository.name }}"
-          REPO_URL="${{ github.event.repository.html_url }}"
-          START_TIME="${{ github.event.workflow_run.run_started_at }}"
-          END_TIME="${{ github.event.workflow_run.updated_at }}"
-          WORKFLOW_URL="${{ github.event.workflow_run.html_url }}"
-          ACTOR_NAME="${{ github.event.workflow_run.triggering_actor.login }}"
-
-          # 5. Enviar el JSON limpio hacia el Incoming Webhook de Jira
-          curl -s -X POST "${{ secrets.JIRA_DEPLOYMENT_WEBHOOK }}" \
+          # 5. Envío a Jira REST API
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "$JIRA_BASE_URL/rest/api/3/issue" \
+            -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
             -H "Content-Type: application/json" \
-            -d '{
-              "common": {
-                "summary": "[DEPLOYMENT]['"$ENV_NAME"']['"$REPO_NAME"'] '"$SHORT_SHA"'",
-                "pais": "${{ vars.PAIS || '\''CL'\'' }}",
-                "ambiente": "'"$ENV_NAME"'",
-                "aplicacion": "'"$REPO_NAME"'",
-                "tipo_cambio": "'"$CHANGE_TYPE"'",
-                "tipo_componente": "normal",
-                "repositorio_url": "'"$REPO_URL"'",
-                "pull_request_url": "'"$REPO_URL"'",
-                "commit_sha": "'"$SHORT_SHA"'",
-                "fecha_inicio": "'"$START_TIME"'",
-                "fecha_fin": "'"$END_TIME"'",
-                "resultado": "'"$DEPLOY_STATUS"'",
-                "observaciones": "'"${COMMIT_MSG//$'\n'/ }"'",
-                "portafolio": "${{ vars.PORTAFOLIO || '\''Crecer en Clientes'\'' }}",
-                "plataforma": "Docker Swarm",
-                "fuente": "Github Actions",
-                "workflow_run_url": "'"$WORKFLOW_URL"'",
-                "actor": "'"$ACTOR_NAME"'"
-              },
-              "platform_data": {
-                "swarm_cluster": "swarm-prod-cl",
-                "stack": "'"$REPO_NAME"'-stack",
-                "service_name": "'"$REPO_NAME"'-api",
-                "docker_image": "'"$REPO_NAME"'",
-                "docker_image_tag": "'"$SHORT_SHA"'",
-                "url_harbor": "hub.fif.tech/omni/'"$REPO_NAME"':'"$SHORT_SHA"'"
-              }
-            }'
+            -H "Accept: application/json" \
+            -d "$PAYLOAD")
 
-          echo "Trazabilidad enviada a Jira con éxito."
+          HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
+
+          echo "Respuesta HTTP: $HTTP_CODE"
+          echo "$HTTP_BODY"
+
+          if [ "$HTTP_CODE" -ne 201 ]; then
+            echo "Error creando Deployment Record en Jira"
+            exit 1
+          fi
