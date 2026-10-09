@@ -1,10 +1,11 @@
-name: "Jira Deployment Record - API"
+name: "Jira Deployment Record"
 
 on:
   workflow_run:
-    workflows: ["release"]  # Reemplaza por el 'name' de tu workflow origen
+    workflows: ["release"]  # Escucha al workflow 'CI' del template de FastAPI
     types:
       - completed
+  workflow_dispatch:   # Permite disparar la prueba manualmente desde la web de GitHub
 
 jobs:
   create-jira-deployment:
@@ -16,30 +17,36 @@ jobs:
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           
-          # Datos del evento workflow_run
-          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          BRANCH: ${{ github.event.workflow_run.head_branch }}
-          COMMIT_SHA: ${{ github.event.workflow_run.head_commit.id }}
-          COMMIT_MSG: ${{ github.event.workflow_run.head_commit.message }}
+          # Manejo de fallback por si lo ejecutas manualmente con workflow_dispatch
+          CONCLUSION: ${{ github.event.workflow_run.conclusion || 'success' }}
+          BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_commit.id || github.sha }}
+          COMMIT_MSG: ${{ github.event.workflow_run.head_commit.message || 'Prueba manual de despliegue' }}
           REPO_URL: ${{ github.event.repository.html_url }}
           APP_NAME: ${{ github.event.repository.name }}
-          WORKFLOW_URL: ${{ github.event.workflow_run.html_url }}
+          WORKFLOW_URL: ${{ github.event.workflow_run.html_url || github.server_url }}
           PR_URL: ${{ github.event.workflow_run.pull_requests[0].html_url }}
         run: |
-          # 1. Determinar Ambiente según la rama
+          # 1. Determinar Ambiente
           if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
             ENV_VALUE="PROD"
           else
             ENV_VALUE="QA"
           fi
 
-          # 3. Formatear fechas y SHA
+          # 2. Determinar Resultado
+          if [ "$CONCLUSION" = "success" ]; then
+            RESULT_VALUE="Exitoso"
+          else
+            RESULT_VALUE="Fallido"
+          fi
+
           SHORT_SHA=$(echo "$COMMIT_SHA" | cut -c1-7)
           FECHA_SOLICITADA=$(date -u +"%Y-%m-%dT%H:%M:%S.000-0300")
           FECHA_TERMINO=$(date -u +"%Y-%m-%dT%H:%M:%S.000-0300")
           PR_LINK="${PR_URL:-$REPO_URL}"
 
-          # 4. Construir Payload JSON (IDs estándar del proyecto PT)
+          # 3. Payload con los campos de Jira
           PAYLOAD=$(cat <<EOF
           {
             "fields": {
@@ -76,7 +83,7 @@ jobs:
           EOF
           )
 
-          # 5. Envío a Jira REST API
+          # 4. Llamada HTTP a Jira
           HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
             -X POST "$JIRA_BASE_URL/rest/api/3/issue" \
             -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
@@ -87,10 +94,11 @@ jobs:
           HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
           HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
 
-          echo "Respuesta HTTP: $HTTP_CODE"
+          echo "Código HTTP recibido: $HTTP_CODE"
+          echo "Respuesta de Jira:"
           echo "$HTTP_BODY"
 
           if [ "$HTTP_CODE" -ne 201 ]; then
-            echo "Error creando Deployment Record en Jira"
+            echo "Error al crear el ticket en Jira"
             exit 1
           fi
