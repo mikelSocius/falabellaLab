@@ -2,7 +2,7 @@ name: "Jira Deployment Record"
 
 on:
   workflow_run:
-    workflows: ["release"]  # Escucha al workflow 'CI' del template de FastAPI
+    workflows: ["Release"]  # Escucha al workflow 'CI' del template de FastAPI
     types:
       - completed
   workflow_dispatch:   # Permite disparar la prueba manualmente desde la web de GitHub
