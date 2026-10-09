@@ -48,6 +48,7 @@ jobs:
 
           # 3. Payload con los campos de Jira
           PAYLOAD=$(cat <<EOF
+          PAYLOAD=$(cat <<EOF
           {
             "fields": {
               "project": { "key": "PT" },
@@ -71,15 +72,25 @@ jobs:
               "customfield_10766": "$REPO_URL",
               "customfield_10767": "$PR_LINK",
               "customfield_10768": "$SHORT_SHA",
-              "customfield_10769": "$FECHA_SOLICITADA",
+              "customfield_10769": "$NOW",
               "customfield_10770": { "value": "$RESULT_VALUE" },
-              "customfield_10771": "$FECHA_TERMINO",
-              "customfield_10772": "Ejecución automatizada desde GitHub Actions. Logs: $WORKFLOW_URL",
+              "customfield_10771": "$NOW",
+              "customfield_10772": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [{ "type": "text", "text": "Ejecución: $WORKFLOW_URL" }]
+                  }
+                ]
+              },
               "customfield_10773": { "value": "Fanatizar" },
-              "customfield_10774": { "value": "Portainer" },
-              "customfield_10775": { "value": "GitHub Actions" }
+              "customfield_10774": { "value": "Portainer" }
             }
           }
+          EOF
+          )
           EOF
           )
 
