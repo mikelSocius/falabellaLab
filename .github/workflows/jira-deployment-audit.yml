@@ -2,10 +2,10 @@ name: "Jira Deployment Record"
 
 on:
   workflow_run:
-    workflows: ["Release"]  # Escucha al workflow 'CI' del template de FastAPI
+    workflows: ["Release"]
     types:
       - completed
-  workflow_dispatch:   # Permite disparar la prueba manualmente desde la web de GitHub
+  workflow_dispatch:
 
 jobs:
   create-jira-deployment:
@@ -17,11 +17,10 @@ jobs:
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           
-          # Manejo de fallback por si lo ejecutas manualmente con workflow_dispatch
           CONCLUSION: ${{ github.event.workflow_run.conclusion || 'success' }}
           BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
           COMMIT_SHA: ${{ github.event.workflow_run.head_commit.id || github.sha }}
-          COMMIT_MSG: ${{ github.event.workflow_run.head_commit.message || 'Prueba manual de despliegue' }}
+          COMMIT_MSG: ${{ github.event.workflow_run.head_commit.message || 'Despliegue manual' }}
           REPO_URL: ${{ github.event.repository.html_url }}
           APP_NAME: ${{ github.event.repository.name }}
           WORKFLOW_URL: ${{ github.event.workflow_run.html_url || github.server_url }}
@@ -42,13 +41,11 @@ jobs:
           fi
 
           SHORT_SHA=$(echo "$COMMIT_SHA" | cut -c1-7)
-          FECHA_SOLICITADA=$(date -u +"%Y-%m-%dT%H:%M:%S.000-0300")
-          FECHA_TERMINO=$(date -u +"%Y-%m-%dT%H:%M:%S.000-0300")
+          NOW=$(date -u +"%Y-%m-%dT%H:%M:%S.000-0300")
           PR_LINK="${PR_URL:-$REPO_URL}"
 
-          # 3. Payload con los campos de Jira
-          PAYLOAD=$(cat <<EOF
-          PAYLOAD=$(cat <<EOF
+          # 3. Generar payload en archivo payload.json
+          cat <<EOF > payload.json
           {
             "fields": {
               "project": { "key": "PT" },
@@ -90,17 +87,14 @@ jobs:
             }
           }
           EOF
-          )
-          EOF
-          )
 
-          # 4. Llamada HTTP a Jira
+          # 4. Enviar a Jira
           HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
             -X POST "$JIRA_BASE_URL/rest/api/3/issue" \
             -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json" \
-            -d "$PAYLOAD")
+            -d @payload.json)
 
           HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
           HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
